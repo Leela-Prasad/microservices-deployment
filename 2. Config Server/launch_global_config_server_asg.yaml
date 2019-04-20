@@ -1,0 +1,56 @@
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    config_server_security_group_name: config-server-sg
+    instance_type: t2.nano
+    base_image_name: ami-0d31a27bc9d3327a9
+
+  tasks:
+    - name: Firewall Rules for Config Server
+      ec2_group:
+        name: "{{ config_server_security_group_name }}"
+        description: Firewall Rules for Config Server
+        region: "{{ region }}"
+        #outbound rules
+        rules_egress:
+          - proto: tcp
+            from_port: 0
+            to_port: 65535
+            cidr_ip: 0.0.0.0/0
+        #Inbound Rules
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 8888
+            to_port: 8888
+            cidr_ip: 0.0.0.0/0
+
+    - name: Launch Configuration for Config Server
+      ec2_lc:
+        name: config-server-lc
+        image_id: "{{ base_image_name }}"
+        key_name: microservices-course-keypair
+        region: "{{ region }}"
+        security_groups: "{{ config_server_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+
+    - name: ASG for Config Server
+      ec2-asg:
+        name: config-server-asg
+        region: "{{ region }}"
+        availability_zones: [ "{{ region }}a", "{{ region }}b" ]
+        launch_config_name: "config-server-lc"
+        min_size: 2
+        max_size: 2
+        tags:
+          - Name: Config Server
+        load_balancers: [ 'config-server-elb' ]
+
+
+
+

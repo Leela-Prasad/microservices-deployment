@@ -1,0 +1,56 @@
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    eureka_server_security_group_name: eureka-server-sg
+    instance_type: t2.nano
+    base_image_name: ami-0cf4bed0eb8af8f4a
+
+  tasks:
+    - name: Firewall Rules for Eureka Server
+      ec2_group:
+        name: "{{ eureka_server_security_group_name }}"
+        description: Firewall Rules for Eureka Server
+        region: "{{ region }}"
+        #outbound rules
+        rules_egress:
+          - proto: tcp
+            from_port: 0
+            to_port: 65535
+            cidr_ip: 0.0.0.0/0
+        #Inbound Rules
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 8010
+            to_port: 8010
+            cidr_ip: 0.0.0.0/0
+
+    - name: Launch Configuration for Eureka Server
+      ec2_lc:
+        name: eureka-server-lc
+        image_id: "{{ base_image_name }}"
+        key_name: microservices-course-keypair
+        region: "{{ region }}"
+        security_groups: "{{ eureka_server_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+        instance_profile_name: eureka-eip-allocation
+
+    - name: ASG for Eureka Server
+      ec2_asg:
+        name: eureka-server-asg
+        region: "{{ region }}"
+        availability_zones: [ "{{ region }}a", "{{ region }}b" ]
+        launch_config_name: "eureka-server-lc"
+        min_size: 2
+        max_size: 2
+        tags:
+          - Name: Eureka Server
+
+
+
+

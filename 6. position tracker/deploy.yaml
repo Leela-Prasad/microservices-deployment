@@ -1,0 +1,167 @@
+
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    position_tracker_security_group_name: position-tracker-sg
+    instance_type: t2.nano
+    base_image_name: ami-0889b8a448de4fc44
+    number_of_instances_to_create: 1
+
+  tasks:
+
+    - name: Variables for later plays
+      set_fact:
+        region: "{{ region }}"
+          
+    - name: Firewall Rules
+      ec2_group:
+        name: "{{ position_tracker_security_group_name }}"
+        description: Firewall Rules for Position Tracker Microservice
+        region: "{{ region }}"
+        #outbound rules
+        rules_egress:
+          - proto: tcp
+            from_port: 0
+            to_port: 65535
+            cidr_ip: 0.0.0.0/0
+        #Inbound Rules
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 8080
+            to_port: 8080
+            cidr_ip: 0.0.0.0/0
+
+    - name: Start up an EC2 Instance
+      ec2:
+        key_name: microservices-course-keypair
+        group: "{{ position_tracker_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ base_image_name }}"
+        region: "{{ region }}"
+        # wait for the server to come up
+        wait: yes
+        exact_count: "{{ number_of_instances_to_create }}"
+        instance_tags:
+          Name: Position_Tracker
+          Deploy: Blue
+        count_tag:
+          Name: Position_Tracker
+          Deploy: Blue
+      # Register started instances to ec2 variable
+      register: ec2
+
+    - name: Gather New IP Address of Ec2 Instances and add it to a inmemory group
+      add_host:
+        groups: new_ec2_instances
+        hostname: "{{ item.public_ip }}"
+      with_items: "{{ ec2.instances }}"
+
+      #If we don't wait for SSH port to respond
+      #then in the apply patches step we are trying to
+      #do ssh to the new ec2-instance which will fail.
+    - name: Wait for SSH Port to respond
+      wait_for:
+        port: 22
+        host: "{{ item.public_ip }}"
+        state: started
+      with_items: "{{ ec2.instances }}"
+
+
+- hosts: new_ec2_instances, tag_Name_Position_Tracker
+
+  tasks:
+
+    - name: Patch up the server
+      yum: name=* state=latest
+      become: yes
+
+    - name: Install Jdk 1.8
+      yum:
+        name: java-1.8.0-openjdk-devel
+        state: latest
+      become: yes
+
+    - name: send Artifact to new instance
+      copy:
+        src: target/positionreceiver-0.0.1-SNAPSHOT.jar
+        dest: /home/ec2-user/positionreceiver/target/
+        mode: 0700
+
+    - name: Build a link to the executable so it will become a service
+      file:
+        src: /home/ec2-user/positionreceiver/target/positionreceiver-0.0.1-SNAPSHOT.jar
+        dest: /etc/init.d/positionreceiver
+        state: link
+      become: yes
+
+    - name: Start Position Tracker and make that enabled across reboots
+      service:
+        name: positionreceiver
+        state: started
+        enabled: yes
+      become: yes
+
+    - name: Wait for the new server to begin responding
+      wait_for:
+        host: localhost
+        port: 8080
+        state: started
+
+
+- hosts: localhost
+
+  tasks:
+
+    - name: Gather Facts about Blue Server
+      # ec2_remote_facts will query instance details
+      ec2_remote_facts:
+        filters:
+          "tag:Deploy": Blue
+          "tag:Name": Position_Tracker
+          instance-state-name: running
+        region: "{{ region }}"
+      register: new_server
+
+    - name: Gather Facts about Green Server
+      ec2_remote_facts:
+        filters:
+          "tag:Deploy": Green
+          "tag:Name": Position_Tracker
+          instance-state-name: running
+        region: "{{ region }}"
+      register: old_server
+
+    - name: Terminate Existing Old Green Server
+      ec2:
+        exact_count: 0
+        instance_tags:
+          Deploy: Green
+          Name: Position_Tracker
+        count_tag:
+          Name: Position_Tracker
+          Deploy: Green
+        region: "{{ region }}"
+        image: notneeded
+
+    - name: All done, Set new Server to Green Tag
+      # ec2_tag is used to tag instances.
+      ec2_tag:
+        region: "{{ region }}"
+        resource: "{{ new_server.instances[0].id  }}"
+        tags:
+          Deploy: Green
+        state: present
+
+    - name: Remove Blue Tag
+      ec2_tag:
+        region: "{{ region }}"
+        resource: "{{ new_server.instances[0].id  }}"
+        tags:
+          Deploy: Blue
+        state: absent

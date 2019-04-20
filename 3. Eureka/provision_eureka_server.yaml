@@ -1,0 +1,141 @@
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    eureka_server_security_group_name: eureka-server-sg
+    instance_type: t2.nano
+    base_image_name: ami-0889b8a448de4fc44
+    number_of_instances_to_create: 1
+
+  tasks:
+    - name: Firewall Rules for Eureka Server
+      ec2_group:
+        name: "{{ eureka_server_security_group_name }}"
+        description: Firewall Rules for Eureka Server
+        region: "{{ region }}"
+        #outbound rules
+        rules_egress:
+          - proto: tcp
+            from_port: 0
+            to_port: 65535
+            cidr_ip: 0.0.0.0/0
+        #Inbound Rules
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 8010
+            to_port: 8010
+            cidr_ip: 0.0.0.0/0
+
+    - name: Start up an EC2 instance
+      ec2:
+        key_name: microservices-course-keypair
+        group: "{{ eureka_server_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ base_image_name }}"
+        region: "{{ region }}"
+        # wait for the server to come up
+        wait: yes
+        exact_count: "{{ number_of_instances_to_create }}"
+        instance_tags:
+          Name: Eureka Server
+        count_tag:
+          Name: Eureka Server
+        # This property is used to assign a role
+        # (eureka-eip-allocation) to running instance.
+        instance_profile_name: eureka-eip-allocation
+      # Register started instances to ec2 variable
+      register: ec2
+
+    - name: Gather New IP Address of Ec2 Instances and add it to a inmemory group
+      add_host:
+        groups: new_ec2_instances
+        hostname: "{{ item.public_ip }}"
+      with_items: "{{ ec2.instances }}"
+
+      #If we don't wait for SSH port to respond
+      #then in the apply patches step we are trying to
+      #do ssh to the new ec2-instance which will fail.
+    - name: Wait for SSH Port to respond
+      wait_for:
+        port: 22
+        host: "{{ item.public_ip }}"
+        state: started
+      with_items: "{{ ec2.instances }}"
+
+- hosts: new_ec2_instances, tag_Name_Eureka_Server
+
+  tasks:
+    - name: Patch up the server
+      yum: name=* state=latest
+      become: yes
+
+    - name: Install Jdk 1.8
+      yum:
+        name: java-1.8.0-openjdk-devel
+        state: latest
+      become: yes
+
+    - name: Install Git
+      yum:
+        name: git
+        state: latest
+      become: yes
+
+    #Maven Installation Tasks Start
+    - name: Create opt Directory
+      file:
+        path: /opt
+        state: directory
+      become: yes
+
+    - name: Download Maven
+      get_url:
+        url: https://www-us.apache.org/dist/maven/maven-3/3.6.0/binaries/apache-maven-3.6.0-bin.tar.gz
+        dest: /opt/maven3.tar.gz
+      become: yes
+
+    - name: Unpack Maven
+      unarchive:
+        remote_src: yes
+        src: /opt/maven3.tar.gz
+        dest: /opt/
+      become: yes
+
+    - name : Set mvn command
+      alternatives:
+        name: mvn
+        path: /opt/apache-maven-3.6.0/bin/mvn
+        link: /usr/bin/mvn
+      become: yes
+
+    - name: Checkout Config Server From Git Hub
+      git:
+        repo: https://github.com/Leela-Prasad/fleetman-registry
+        dest: /home/ec2-user/fleetman-registry
+        version: master
+
+    - name: Build Artifact through mvn command
+      command: mvn -DskipTests package
+      args:
+        chdir: ~/fleetman-registry/
+        creates: ~/fleetman-registry/fleetman-registry-0.0.1-SNAPSHOT.jar
+
+    - name: Build a link to the executable so it will become a service
+      file:
+        src: /home/ec2-user/fleetman-registry/target/fleetman-registry-0.0.1-SNAPSHOT.jar
+        dest: /etc/init.d/fleetman-registry
+        state: link
+      become: yes
+
+    - name: Start config server and make that enabled across reboots
+      service:
+        name: fleetman-registry
+        state: started
+        enabled: yes
+      become: yes
+

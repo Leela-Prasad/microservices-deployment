@@ -1,0 +1,186 @@
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    webapp_security_group_name: webapp-sg
+    instance_type: t2.nano
+    base_image_name: ami-0889b8a448de4fc44
+    number_of_instances_to_create: 1
+    eip: 52.66.114.147
+
+  tasks:
+    - name: Variables for later plays
+      # Difference between variable and fact
+      # variable is visible within a play
+      # but fact is visible across plays
+      set_fact:
+        region: "{{ region }}"
+        eip: "{{ eip }}"
+
+
+    - name: Firewall Rules
+      ec2_group:
+        name: "{{ webapp_security_group_name }}"
+        description: Firewall Rules for EC2 Instance
+        region: "{{ region }}"
+        #outbound rules
+        rules_egress:
+          - proto: tcp
+            from_port: 0
+            to_port: 65535
+            cidr_ip: 0.0.0.0/0
+        #Inbound Rules
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 8080
+            to_port: 8080
+            cidr_ip: 0.0.0.0/0
+
+    - name: Start up an EC2 Instance
+      ec2:
+        key_name: microservices-course-keypair
+        group: "{{ webapp_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ base_image_name }}"
+        region: "{{ region }}"
+        # wait for the server to come up
+        wait: yes
+        exact_count: "{{ number_of_instances_to_create }}"
+        instance_tags:
+          Name: webapp
+          Deploy: Blue
+        count_tag:
+          Name: webapp
+          Deploy: Blue
+      # Register started instances to ec2 variable
+      register: ec2
+
+    - name: Gather New IP Address of Ec2 Instances and add it to a inmemory group
+      add_host:
+        groups: new_ec2_instances
+        hostname: "{{ item.public_ip }}"
+      with_items: "{{ ec2.instances }}"
+
+      #If we don't wait for SSH port to respond
+      #then in the apply patches step we are trying to
+      #do ssh to the new ec2-instance which will fail.
+    - name: Wait for SSH Port to respond
+      wait_for:
+        port: 22
+        host: "{{ item.public_ip }}"
+        state: started
+      with_items: "{{ ec2.instances }}"
+
+
+- hosts: new_ec2_instances, tag_Name_webapp
+
+  tasks:
+
+    - name: Patch up the server
+      yum: name=* state=latest
+      become: yes
+
+    - name: Install Jdk 1.8
+      yum:
+        name: java-1.8.0-openjdk-devel
+        state: latest
+      become: yes
+
+    - name: send Artifact to new instance
+      copy:
+        src: target/fleetman-0.0.1-SNAPSHOT.war
+        dest: /home/ec2-user/webapp/target/
+        mode: 0700
+
+    - name: Build a link to the executable so it will become a service
+      file:
+        src: /home/ec2-user/webapp/target/fleetman-0.0.1-SNAPSHOT.war
+        dest: /etc/init.d/fleetman
+        state: link
+      become: yes
+
+    - name: Start config server and make that enabled across reboots
+      service:
+        name: fleetman
+        state: started
+        enabled: yes
+      become: yes
+
+    - name: Wait for the new webserver to begin responding
+      wait_for:
+        host: localhost
+        port: 8080
+        state: started
+
+
+- hosts: localhost
+
+  tasks:
+
+    - name: Gather Facts about Blue Server
+      # ec2_remote_facts will query instance details
+      ec2_remote_facts:
+        filters:
+          "tag:Deploy": Blue
+          "tag:Name": webapp
+          instance-state-name: running
+        region: "{{ region }}"
+      register: new_server
+
+    - name: Gather Facts about Green Server
+      ec2_remote_facts:
+        filters:
+          "tag:Deploy": Green
+          "tag:Name": webapp
+          instance-state-name: running
+        region: "{{ region }}"
+      register: old_server
+
+    - name: Deallocate EIP from Old Green Server
+      # ec2_eip is used to allocate/deallocate Elastic IPs
+      ec2_eip:
+        device_id: "{{ old_server.instances[0].id }}"
+        ip: "{{ eip }}"
+        state: absent
+        region: "{{ region }}"
+      when: old_server.instances[0] is defined
+
+    - name: Allocate EIP to New Blue Server
+      ec2_eip:
+        device_id: "{{ new_server.instances[0].id }}"
+        ip: "{{ eip }}"
+        region: "{{ region }}"
+
+    - name: Terminate Existing Old Green Server
+      ec2:
+        exact_count: 0
+        instance_tags:
+          Deploy: Green
+          Name: webapp
+        count_tag:
+          Name: webapp
+          Deploy: Green
+        region: "{{ region }}"
+        image: notneeded
+
+    - name: All done, Set new Server to Green Tag
+      # ec2_tag is used to tag instances.
+      ec2_tag:
+        region: "{{ region }}"
+        resource: "{{ new_server.instances[0].id  }}"
+        tags:
+          Deploy: Green
+        state: present
+
+    - name: Remove Blue Tag
+      ec2_tag:
+        region: "{{ region }}"
+        resource: "{{ new_server.instances[0].id  }}"
+        tags:
+          Deploy: Blue
+        state: absent

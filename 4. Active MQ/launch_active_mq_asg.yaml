@@ -1,0 +1,57 @@
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    active_mq_server_security_group_name: active-mq-sg
+    instance_type: t2.nano
+    base_image_name: ami-0be731b2921d1291b
+
+  tasks:
+    - name: Firewall Rules for Active MQ Server
+      ec2_group:
+        name: "{{ active_mq_server_security_group_name }}"
+        description: Firewall Rules for Active MQ Server
+        region: "{{ region }}"
+        #outbound rules
+        rules_egress:
+          - proto: tcp
+            from_port: 0
+            to_port: 65535
+            cidr_ip: 0.0.0.0/0
+        #Inbound Rules
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 8161
+            to_port: 8161
+            cidr_ip: 0.0.0.0/0
+
+          - proto: tcp
+            from_port: 61616
+            to_port: 61616
+            cidr_ip: 0.0.0.0/0
+
+    - name: Launch Configuration for Active MQ Server
+      ec2_lc:
+        name: active-mq-lc
+        image_id: "{{ base_image_name }}"
+        key_name: microservices-course-keypair
+        region: "{{ region }}"
+        security_groups: "{{ active_mq_server_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+
+    - name: ASG for Active MQ Server
+      ec2_asg:
+        name: active-mq-asg
+        region: "{{ region }}"
+        availability_zones: [ "{{ region }}a" ]
+        launch_config_name: "active-mq-lc"
+        min_size: 1
+        max_size: 1
+        tags:
+          - Name: Active MQ
+        load_balancers: [ 'active-mq-elb' ]
