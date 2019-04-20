@@ -1,0 +1,49 @@
+#This script installs Jenkins
+
+- hosts: all
+
+  tasks:
+    - name: Ensure Apache is NOT installed on this server.
+      yum:
+        name: httpd
+        state: absent
+      become: yes
+
+    - name: Patch up the server
+      yum: name=* state=latest
+      become: yes
+
+    - name: Install Jdk 1.8
+      yum:
+        name: java-1.8.0-openjdk-devel
+        state: latest
+      become: yes
+
+    - name: Add Jenkins Red Hat Repository
+      yum_repository:
+        name: Jenkins
+        description: Jenkins Repo
+        baseurl: http://pkg.jenkins.io/redhat-stable
+      become: yes
+
+    - name: Add Jenkins Public Key
+      rpm_key:
+        key: http://pkg.jenkins-ci.org/redhat-stable/jenkins-ci.org.key
+      become: yes
+
+    - name: Install Jenkins
+      yum:
+        name: jenkins
+        state: latest
+      become: yes
+
+    - name: Start Jenkins and Enable acrooss Reboots
+      service:
+        name: jenkins
+        state: started
+        enabled: yes
+      become: yes
+
+
+
+

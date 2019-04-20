@@ -1,0 +1,23 @@
+# Start Stopped EC2 Instances by Tag.
+
+- hosts: localhost
+
+  vars:
+    region: ap-south-1
+    jenkins_security_group_name: Jenkins-Server-sg
+    instance_type: t2.micro
+    base_image_name: ami-0889b8a448de4fc44
+
+  tasks:
+    - name: Stop all EC2 instance by Tag
+      ec2:
+        key_name: microservices-course-keypair
+        group: "{{ jenkins_security_group_name }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ base_image_name }}"
+        region: "{{ region }}"
+        wait: yes
+        state: stopped
+        instance_tags:
+          Name: Jenkins Server Automated
+

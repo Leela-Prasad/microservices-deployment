@@ -1,0 +1,17 @@
+# Provision an EC2 Instance
+
+- hosts: localhost
+
+  tasks:
+    - name: Start up an EC2 instance
+      ec2:
+        key_name: microservices-course-keypair
+        group: Jenkins-sg
+        instance_type: t2.micro
+        image: ami-0889b8a448de4fc44
+        region: ap-south-1
+        exact_count: 1
+        instance_tags:
+          Name: Jenkins Server Automated
+        count_tag:
+          Name: Jenkins Server Automated

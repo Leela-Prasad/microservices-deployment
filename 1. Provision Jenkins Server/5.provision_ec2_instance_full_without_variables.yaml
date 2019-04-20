@@ -1,0 +1,82 @@
+# Provision an EC2 Instance
+
+- hosts: localhost
+
+  tasks:
+    - name: Start up an EC2 instance
+      ec2:
+        key_name: microservices-course-keypair
+        group: Jenkins-sg
+        instance_type: t2.micro
+        image: ami-0889b8a448de4fc44
+        region: ap-south-1
+        # wait for the server to come up
+        wait: yes
+        exact_count: 1
+        instance_tags:
+          Name: Jenkins Server Automated
+        count_tag:
+          Name: Jenkins Server Automated
+      # Register started instances to ec2 variable
+      register: ec2
+
+    - name: Gather New IP Address of Ec2 Instances and add it to a inmemory group
+      add_host:
+        groups: new_ec2_instances
+        hostname: "{{ item.public_ip }}"
+      with_items: "{{ ec2.instances }}"
+
+      #If we don't wait for SSH port to respond
+      #then in the apply patches step we are trying to
+      #do ssh to the new ec2-instance which will fail.
+    - name: Wait for SSH Port to respond
+      wait_for:
+        port: 22
+        host: "{{ item.public_ip }}"
+        state: started
+      with_items: "{{ ec2.instances }}"
+
+
+- hosts: new_ec2_instances, tag_Name_Jenkins_Server_Automated
+
+  tasks:
+    - name: Ensure Apache is NOT installed on this server.
+      yum:
+        name: httpd
+        state: absent
+      become: yes
+
+    - name: Patch up the server
+      yum: name=* state=latest
+      become: yes
+
+    - name: Install Jdk 1.8
+      yum:
+        name: java-1.8.0-openjdk-devel
+        state: latest
+      become: yes
+
+    - name: Add Jenkins Red Hat Repository
+      yum_repository:
+        name: Jenkins
+        description: Jenkins Repo
+        baseurl: http://pkg.jenkins.io/redhat-stable
+      become: yes
+
+    - name: Add Jenkins Public Key
+      rpm_key:
+        key: http://pkg.jenkins-ci.org/redhat-stable/jenkins-ci.org.key
+      become: yes
+
+    - name: Install Jenkins
+      yum:
+        name: jenkins
+        state: latest
+      become: yes
+
+    - name: Start Jenkins and Enable acrooss Reboots
+      service:
+        name: jenkins
+        state: started
+        enabled: yes
+      become: yes
